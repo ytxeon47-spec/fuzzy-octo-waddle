@@ -1,0 +1,120 @@
+name: MX Linux Direct QEMU & VirGL Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  launch-linux-kvm:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: 1. Install QEMU, VirGL & noVNC Stack
+        run: |
+          echo "=== [STEP 1/5] Installing QEMU, KVM, VirGL & VNC Web Client ==="
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            libvirt-clients \
+            libvirt-daemon-system \
+            bridge-utils \
+            virt-manager \
+            libgl1-mesa-dri \
+            libglx-mesa0 \
+            mesa-va-drivers \
+            libvirglrenderer1 \
+            virgl-server \
+            mesa-utils \
+            novnc \
+            websockify \
+            curl \
+            wget \
+            p7zip-full
+          
+          echo "=== Initializing KVM & GPU Permissions ==="
+          sudo chmod 666 /dev/kvm || true
+          sudo modprobe kvm || true
+          
+          if [ -d /dev/dri ]; then
+            sudo chmod -R 666 /dev/dri
+          fi
+
+      - name: 2. Download MX Linux ISO Image
+        run: |
+          echo "=== [STEP 2/5] Fetching MX Linux ISO ==="
+          mkdir -p ./iso
+          ISO_URL="https://archive.org/download/antiX_linux/MX-16.1_August_x64.iso"
+          
+          echo "Downloading from: $ISO_URL"
+          wget -q --show-progress -O ./iso/mx-linux.iso "$ISO_URL"
+          
+          if [ -f ./iso/mx-linux.iso ]; then
+            echo "[SUCCESS] ISO file downloaded successfully!"
+            ls -lh ./iso/mx-linux.iso
+          else
+            echo "[ERROR] Download failed!"
+            exit 1
+          fi
+
+      - name: 3. Create 256 GB Virtual Hard Drive
+        run: |
+          echo "=== [STEP 3/5] Allocating 256 GB Disk Image ==="
+          mkdir -p ./storage
+          qemu-img create -f qcow2 ./storage/disk.qcow2 256G
+          echo "[SUCCESS] Virtual Disk created (256 GB capacity)."
+
+      - name: 4. Establish Tailscale Connection
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          sudo tailscale up \
+            --auth-key="${{ secrets.TAILSCALE_AUTHKEY }}" \
+            --hostname="gh-runner-linux-$GITHUB_RUN_ID" \
+            --accept-routes || true
+          
+          TS_IP=""
+          RETRIES=0
+          while [ -z "$TS_IP" ] && [ $RETRIES -lt 10 ]; do
+              TS_IP=$(tailscale ip -4 || true)
+              sleep 5
+              RETRIES=$((RETRIES+1))
+          done
+          
+          if [ -z "$TS_IP" ]; then
+              echo "Tailscale IP not assigned yet. Check authentication in logs."
+          fi
+          
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: 5. Launch QEMU Virtual Machine Direct
+        run: |
+          echo "=== [STEP 5/5] Starting QEMU Linux Machine ==="
+          
+          # Запуск noVNC веб-клиента на порту 8006
+          websockify --web /usr/share/novnc 8006 localhost:5900 &
+          sleep 2
+
+          echo -e "\n======================================================="
+          echo " MX Linux QEMU Machine Ready!"
+          echo "======================================================="
+          echo "Web noVNC URL: http://$TAILSCALE_IP:8006/vnc.html"
+          echo "Raw VNC Port:  $TAILSCALE_IP:5900"
+          echo "Disk Size:     256 GB"
+          echo "Autologin:     Enabled (Default Live Desktop)"
+          echo "=======================================================\n"
+
+          # Прямой запуск QEMU с автозагрузкой Live-системы без экранов логина
+          qemu-system-x86_64 \
+            -enable-kvm \
+            -m 12G \
+            -smp cores=4,threads=1 \
+            -cpu host \
+            -drive file=./storage/disk.qcow2,format=qcow2,if=virtio \
+            -cdrom ./iso/mx-linux.iso \
+            -boot order=d \
+            -vga virtio \
+            -display vnc=:0 \
+            -device virtio-sound-pci \
+            -net nic,model=virtio \
+            -net user,hostfwd=tcp::8006-:8006
