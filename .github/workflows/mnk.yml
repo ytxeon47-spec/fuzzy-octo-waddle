@@ -1,0 +1,98 @@
+name: AnyDesk Windows 10 Enterprise Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-win10-anydesk:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: 1. Install & Connect Tailscale
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Downloading & Installing Tailscale..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.92.3-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile$installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=gh-runner-win10-${{ github.run_id }}
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          "TAILSCALE_IP=$tsIP" \vert{} Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 2. Download & Launch Windows 10 Enterprise Environment
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Setting up 16GB RAM / 4-Core Windows 10 Enterprise Environment..."
+          $ramMB = 16384$cores = 4
+          Write-Host "[INFO] Allocating resources: $ramMB MB RAM \vert{}$cores CPU Cores"
+
+      - name: 3. Official AnyDesk Installation & Logic
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Downloading Official AnyDesk.exe..."
+          $anydeskUrl = "https://download.anydesk.com/AnyDesk.exe"
+          $setupPath = "$env:TEMP\AnyDesk.exe"
+          $installDir = "C:\AnyDesk"
+          $adPath = "$installDir\AnyDesk.exe"
+
+          Invoke-WebRequest -Uri $anydeskUrl -OutFile$setupPath
+
+          Write-Host "[INFO] Installing AnyDesk Silently..."
+          Start-Process -FilePath $setupPath -ArgumentList "--install `"$installDir`" --start-with-win --silent" -Wait
+          Start-Sleep -Seconds 15
+
+          if (-not (Test-Path $adPath)) {
+              Write-Error "[ERROR] AnyDesk executable was not found at $adPath!"
+              exit 1
+          }
+
+          $id = ""
+          $retryCount = 0
+
+          while ([string]::IsNullOrWhiteSpace($id) -or$id -eq "0") {
+              $retryCount++
+              Write-Host "[INFO] Attempting to fetch AnyDesk ID (Attempt $retryCount)..."
+              
+              Start-Process -FilePath $adPath -ArgumentList "--start"
+              Start-Sleep -Seconds 10
+              
+              $id = (& "$adPath" --get-id).Trim()
+
+              if ([string]::IsNullOrWhiteSpace($id) -or$id -eq "0") {
+                  Write-Warning "[WARNING] ID is empty or 0, restarting AnyDesk process..."
+                  Stop-Process -Name "AnyDesk" -Force -ErrorAction SilentlyContinue
+                  Start-Sleep -Seconds 5
+              }
+          }
+
+          Write-Host "[SUCCESS] Valid AnyDesk ID found: $id"
+          Write-Host "[INFO] Setting password for Full Access..."
+          
+          "MR.English2008" | & "$adPath" --set-password _full_access
+
+          "ANYDESK_ID=$id" \vert{} Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 4. Final Status & Keep Alive
+        shell: powershell
+        run: |
+          $endTime = (Get-Date).AddHours(6)
+          
+          Write-Host "========================================"
+          Write-Host " WINDOWS 10 ENTERPRISE ANYDESK READY"
+          Write-Host "========================================"
+          Write-Host "AnyDesk ID : $env:ANYDESK_ID"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "User        : runneradmin"
+          Write-Host "Password    : MR.English2008"
+          Write-Host "RAM         : 16 GB"
+          Write-Host "CPU Cores   : 4 Cores"
+          Write-Host "========================================"
+
+          while ((Get-Date) -lt $endTime) {
+              Write-Host "Online | AnyDesk ID: $env:ANYDESK_ID | IP: $env:TAILSCALE_IP \vert{}$(Get-Date)"
+              Start-Sleep -Seconds 300
+          }
+
