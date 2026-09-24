@@ -26,9 +26,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "[INFO] Setting up 16GB RAM / 4-Core Windows 10 Enterprise Environment..."
-          # Конфигурация ресурсов: 16ГБ ОЗУ и 4 ядра
           $ramMB = 16384$cores = 4
-          
           Write-Host "[INFO] Allocating resources: $ramMB MB RAM \vert{}$cores CPU Cores"
 
       - name: 3. Official AnyDesk Installation & Logic
@@ -58,7 +56,6 @@ jobs:
               $retryCount++
               Write-Host "[INFO] Attempting to fetch AnyDesk ID (Attempt $retryCount)..."
               
-              # Запуск службы AnyDesk при необходимости
               Start-Process -FilePath $adPath -ArgumentList "--start"
               Start-Sleep -Seconds 10
               
@@ -74,7 +71,6 @@ jobs:
           Write-Host "[SUCCESS] Valid AnyDesk ID found: $id"
           Write-Host "[INFO] Setting password for Full Access..."
           
-          # Установка пароля
           "MR.English2008" | & "$adPath" --set-password _full_access
 
           "ANYDESK_ID=$id" \vert{} Out-File -FilePath $env:GITHUB_ENV -Append
@@ -99,4 +95,3 @@ jobs:
               Write-Host "Online | AnyDesk ID: $env:ANYDESK_ID | IP: $env:TAILSCALE_IP \vert{}$(Get-Date)"
               Start-Sleep -Seconds 300
           }
-
